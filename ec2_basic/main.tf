@@ -1,5 +1,3 @@
-variable "key_name" {}
-
 terraform {
   required_providers {
     aws = {
@@ -78,14 +76,9 @@ resource "aws_security_group" "allow_ssh" {
   }
 }
 
-resource "tls_private_key" "my_keypair" {
-  algorithm = "RSA"
-  rsa_bits  = 4096
-}
-
-resource "aws_key_pair" "generated_key" {
-  key_name   = var.key_name
-  public_key = tls_private_key.my_keypair.public_key_openssh
+resource "aws_key_pair" "my_keypair" {
+  key_name   = "My_Keypair"
+  public_key = file("${path.root}/../ssh_key/id_rsa.pub")
 }
 
 
@@ -95,14 +88,9 @@ resource "aws_instance" "example" {
   subnet_id     = aws_subnet.example.id
 
   vpc_security_group_ids = [aws_security_group.allow_ssh.id]
-  key_name               = aws_key_pair.generated_key.key_name
+  key_name               = aws_key_pair.my_keypair.key_name
 
   tags = {
     Name = "tf-example"
   }
-}
-
-output "private_key" {
-  value     = tls_private_key.my_keypair.private_key_pem
-  sensitive = true
 }
