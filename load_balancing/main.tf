@@ -1,36 +1,44 @@
-terraform {
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.60.0"
-    }
-  }
-}
-
 provider "aws" {
   region                   = "ap-southeast-1"
   shared_config_files      = ["/home/vagrant/.aws/config"]
   shared_credentials_files = ["/home/vagrant/.aws/credentials"]
 }
 
-locals {
-  az_to_subnet_map = { for az, subnet in aws_subnet.lb_subnet : az => subnet.id }
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
+module "ssh_key" {
+  source = "../modules/ssh_key"
+}
+
+module "vpc" {
+  source                 = "../modules/vpc"
+  cidr_block             = "20.0.0.0/16"
+  aws_availability_zones = data.aws_availability_zones.available.names
+  vpc_name               = "Instance store - VPC"
+}
+
+module "security_group" {
+  source      = "../modules/security_sg"
+  vpc_id      = module.vpc.vpc_id
+  allow_ports = ["22", "80", "443"]
 }
 
 ##############################################################################################
 ### Classic Load Balancer
 ##############################################################################################
 module "clb_instances" {
-  for_each = local.az_to_subnet_map
+  for_each = module.vpc.az_to_subnet_map
 
-  source = "./ec2_module" # Path to your module
+  source = "../modules/ec2" # Path to your module
 
   availability_zone = each.key   # Pass the AZ
   subnet_id         = each.value # Pass the corresponding Subnet ID
   name              = "Classic Load Balancer"
 
-  security_group_id = aws_security_group.lb_sg.id
-  ssh_key_name      = aws_key_pair.my_keypair.key_name
+  security_group_id = module.security_group.security_group_id
+  ssh_key_name      = module.ssh_key.keypair_name
 }
 
 # Get all EC2 instance IDs
@@ -43,8 +51,8 @@ resource "aws_elb" "classic_lb" {
   #   availability_zones = data.aws_availability_zones.available.names
 
   # Subnets where the ELB will be attached (can be from each AZ)
-  subnets         = [for subnet in aws_subnet.lb_subnet : subnet.id]
-  security_groups = [aws_security_group.lb_sg.id]
+  subnets         = module.vpc.subnet_id
+  security_groups = [module.security_group.security_group_id]
 
   listener {
     instance_port     = 80
@@ -73,16 +81,16 @@ resource "aws_elb" "classic_lb" {
 ##############################################################################################
 
 module "alb_instances" {
-  for_each = local.az_to_subnet_map
+  for_each = module.vpc.az_to_subnet_map
 
-  source = "./ec2_module" # Path to your module
+  source = "../modules/ec2" # Path to your module
 
   availability_zone = each.key   # Pass the AZ
   subnet_id         = each.value # Pass the corresponding Subnet ID
   name              = "Application Load Balancer"
 
-  security_group_id = aws_security_group.lb_sg.id
-  ssh_key_name      = aws_key_pair.my_keypair.key_name
+  security_group_id = module.security_group.security_group_id
+  ssh_key_name      = module.ssh_key.keypair_name
 }
 
 # Get all EC2 instance IDs
@@ -98,7 +106,7 @@ resource "aws_lb_target_group" "alb_tg" {
   name     = "alb-target-group"
   port     = 80
   protocol = "HTTP"
-  vpc_id   = aws_vpc.lb_vpc.id
+  vpc_id   = module.vpc.vpc_id
 
   health_check {
     path                = "/"
@@ -117,10 +125,10 @@ resource "aws_lb" "application_lb" {
   name               = "application-load-balancer"
   internal           = false
   load_balancer_type = "application"
-  subnets            = [for subnet in aws_subnet.lb_subnet : subnet.id]
-  security_groups    = [aws_security_group.lb_sg.id]
+  subnets            = module.vpc.subnet_id
+  security_groups    = [module.security_group.security_group_id]
 
-  enable_deletion_protection = true
+  enable_deletion_protection = false
 
   tags = {
     Name = "ApplicationLoadBalancer"
